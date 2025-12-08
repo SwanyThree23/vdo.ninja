@@ -1,15 +1,21 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 import { 
   Video, Users, TrendingUp, MessageSquare, Shield, 
-  Film, Sparkles, Globe, Settings as SettingsIcon
+  Film, Sparkles, Globe, LogOut, User, CreditCard
 } from 'lucide-react';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import Login from './components/Auth/Login';
+import Register from './components/Auth/Register';
+import CreditDisplay from './components/Credits/CreditDisplay';
+import BuyCreditsModal from './components/Credits/BuyCreditsModal';
+import { chatAPI } from './services/api';
+import io from 'socket.io-client';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8002';
 
-function App() {
+function MainApp() {
+  const { user, isAuthenticated, logout, credits, refreshCredits } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isStreaming, setIsStreaming] = useState(false);
   const [metrics, setMetrics] = useState({ fps: 60, bitrate: 6000, viewers: 0 });
@@ -17,78 +23,50 @@ function App() {
   const [input, setInput] = useState('');
   const [processing, setProcessing] = useState(false);
   const [sessionId] = useState(() => `session-${Date.now()}`);
-  const [wsConnected, setWsConnected] = useState(false);
-  const wsRef = useRef(null);
-  const metricsIntervalRef = useRef(null);
+  const [socket, setSocket] = useState(null);
+  const [showBuyCredits, setShowBuyCredits] = useState(false);
 
-  // WebSocket connection
+  // Socket.IO connection
   useEffect(() => {
-    connectWebSocket();
-    loadChatHistory();
-    
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (metricsIntervalRef.current) {
-        clearInterval(metricsIntervalRef.current);
-      }
-    };
-  }, []);
+    if (isAuthenticated) {
+      const newSocket = io(BACKEND_URL);
+      
+      newSocket.on('connect', () => {
+        console.log('✅ Socket connected');
+      });
 
-  const connectWebSocket = () => {
-    try {
-      const ws = new WebSocket(`${WS_URL}/ws/${sessionId}`);
-      
-      ws.onopen = () => {
-        console.log('WebSocket connected');
-        setWsConnected(true);
-      };
-      
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log('WebSocket message:', data);
-        
-        if (data.type === 'stream_started') {
-          console.log('Stream started:', data.session_id);
-        } else if (data.type === 'stream_stopped') {
-          console.log('Stream stopped:', data.session_id);
-        } else if (data.type === 'metrics_update') {
-          setMetrics(data.data);
+      newSocket.on('stream:started', (data) => {
+        console.log('Stream started:', data);
+      });
+
+      newSocket.on('metrics:update', (data) => {
+        if (data.metrics) {
+          setMetrics(data.metrics);
         }
-      };
-      
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setWsConnected(false);
-      };
-      
-      ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        setWsConnected(false);
-        // Attempt to reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000);
-      };
-      
-      wsRef.current = ws;
-    } catch (error) {
-      console.error('WebSocket connection error:', error);
+      });
+
+      setSocket(newSocket);
+
+      return () => newSocket.disconnect();
     }
-  };
+  }, [isAuthenticated]);
+
+  // Load chat history
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadChatHistory();
+    }
+  }, [isAuthenticated]);
 
   const loadChatHistory = async () => {
     try {
-      const response = await fetch(`${API}/chat/history/${sessionId}`);
-      if (response.ok) {
-        const data = await response.json();
-        const formattedMessages = data.messages.map(msg => ({
-          role: msg.role,
-          content: msg.content
-        }));
-        setMessages(formattedMessages);
-      }
+      const response = await chatAPI.getHistory(sessionId);
+      setMessages(response.data.messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      })));
     } catch (error) {
-      console.error('Error loading chat history:', error);
+      console.error('Failed to load chat history:', error);
     }
   };
 
@@ -99,76 +77,57 @@ function App() {
     const userMessage = input.trim();
     setInput('');
     
-    // Add user message to UI immediately
+    // Add user message immediately
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     
     try {
-      const response = await fetch(`${API}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionId,
-          message: userMessage,
-          use_emergent_key: true
-        })
+      const response = await chatAPI.sendMessage({
+        session_id: sessionId,
+        message: userMessage
       });
       
-      if (response.ok) {
-        const data = await response.json();
-        setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
-      } else {
-        const error = await response.json();
-        alert(`Error: ${error.detail || 'Failed to get response'}`);
-      }
+      setMessages(prev => [...prev, { role: 'assistant', content: response.data.message }]);
+      
+      // Refresh credits after successful chat
+      await refreshCredits();
     } catch (error) {
-      console.error('Chat error:', error);
-      alert('Failed to send message. Please try again.');
+      const errorMsg = error.response?.data?.error || 'Failed to send message';
+      alert(errorMsg);
+      
+      if (errorMsg.includes('Insufficient credits')) {
+        setShowBuyCredits(true);
+      }
     } finally {
       setProcessing(false);
     }
   };
 
   const toggleStream = () => {
-    if (!wsConnected) {
-      alert('WebSocket not connected. Please wait...');
-      return;
-    }
+    const newState = !isStreaming;
+    setIsStreaming(newState);
     
-    const newStreamingState = !isStreaming;
-    setIsStreaming(newStreamingState);
-    
-    if (newStreamingState) {
-      // Start streaming
-      wsRef.current.send(JSON.stringify({
-        type: 'stream_start',
-        user_id: 'demo-user',
-        platforms: ['youtube', 'twitch', 'kick']
-      }));
-      
-      // Start sending metrics
-      metricsIntervalRef.current = setInterval(() => {
-        const newMetrics = {
-          fps: 58 + Math.random() * 4,
-          bitrate: 5800 + Math.random() * 400,
-          viewers: Math.max(0, Math.floor(metrics.viewers + Math.random() * 10 - 4))
-        };
-        setMetrics(newMetrics);
+    if (socket) {
+      if (newState) {
+        socket.emit('stream:start', {
+          streamId: sessionId,
+          userId: user?.id,
+          platforms: ['youtube', 'twitch', 'kick']
+        });
         
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'metrics',
-            data: newMetrics
-          }));
-        }
-      }, 2000);
-    } else {
-      // Stop streaming
-      wsRef.current.send(JSON.stringify({
-        type: 'stream_stop'
-      }));
-      
-      if (metricsIntervalRef.current) {
-        clearInterval(metricsIntervalRef.current);
+        // Simulate metrics
+        const interval = setInterval(() => {
+          const newMetrics = {
+            fps: 58 + Math.random() * 4,
+            bitrate: 5800 + Math.random() * 400,
+            viewers: Math.max(0, Math.floor(metrics.viewers + Math.random() * 10 - 4))
+          };
+          setMetrics(newMetrics);
+          socket.emit('stream:metrics', { streamId: sessionId, metrics: newMetrics });
+        }, 2000);
+        
+        return () => clearInterval(interval);
+      } else {
+        socket.emit('stream:stop', { streamId: sessionId });
       }
     }
   };
@@ -191,16 +150,30 @@ function App() {
             </div>
             <div>
               <h1 className="text-2xl font-bold">SwanyBot Pro Ultimate</h1>
-              <p className="text-sm text-purple-300">AI Livestream Ecosystem</p>
+              <p className="text-sm text-purple-300">Enterprise AI Livestream Platform</p>
             </div>
           </div>
+          
           <div className="flex items-center gap-4">
-            {wsConnected && (
-              <div className="flex items-center gap-2 bg-green-500/20 px-3 py-1.5 rounded-full border border-green-500">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="font-semibold text-xs">Connected</span>
+            {/* Credit Display */}
+            <CreditDisplay onBuyCredits={() => setShowBuyCredits(true)} />
+            
+            {/* User Menu */}
+            <div className="flex items-center gap-3 bg-white/10 px-4 py-2 rounded-full">
+              <User className="w-5 h-5" />
+              <div className="text-sm">
+                <div className="font-semibold">{user?.username}</div>
+                <div className="text-xs text-gray-300">{user?.email}</div>
               </div>
-            )}
+              <button
+                onClick={logout}
+                className="p-2 hover:bg-white/10 rounded-lg transition"
+                title="Logout"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+
             {isStreaming && (
               <div className="flex items-center gap-2 bg-red-500/20 px-4 py-2 rounded-full border border-red-500">
                 <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
@@ -265,10 +238,19 @@ function App() {
         {/* AI Chat */}
         {activeTab === 'chat' && (
           <div className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-              <MessageSquare className="w-8 h-8 text-purple-400" />
-              SwanyBot Pro AI
-            </h2>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-8 h-8 text-purple-400" />
+                <div>
+                  <h2 className="text-2xl font-bold">SwanyBot Pro AI</h2>
+                  <p className="text-sm text-gray-300">Powered by Claude Sonnet 4 (1 credit per message)</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm text-gray-400">Your Credits</div>
+                <div className="text-2xl font-bold text-yellow-400">{credits}</div>
+              </div>
+            </div>
             
             <div className="bg-black/30 rounded-xl p-4 h-[500px] overflow-y-auto mb-4">
               {messages.length === 0 ? (
@@ -301,17 +283,28 @@ function App() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder="Ask about streaming, content creation, video tools..."
-                disabled={processing}
+                disabled={processing || credits < 1}
                 className="flex-1 bg-white/10 rounded-xl px-5 py-4 border border-white/20 focus:border-purple-500 focus:outline-none disabled:opacity-50"
               />
               <button
                 onClick={sendMessage}
-                disabled={processing}
+                disabled={processing || credits < 1}
                 className="bg-gradient-to-r from-purple-500 to-pink-500 px-8 py-4 rounded-xl font-semibold hover:scale-105 transition disabled:opacity-50"
               >
-                {processing ? '⏳' : '🚀'}
+                {processing ? '⏳' : credits < 1 ? '💳' : '🚀'}
               </button>
             </div>
+            
+            {credits < 1 && (
+              <div className="mt-2 text-center">
+                <button
+                  onClick={() => setShowBuyCredits(true)}
+                  className="text-sm text-yellow-400 hover:text-yellow-300"
+                >
+                  Out of credits? Click here to buy more
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -323,11 +316,14 @@ function App() {
         {/* Video Tools */}
         {activeTab === 'video' && <VideoTools />}
       </main>
+
+      {/* Buy Credits Modal */}
+      <BuyCreditsModal isOpen={showBuyCredits} onClose={() => setShowBuyCredits(false)} />
     </div>
   );
 }
 
-// Component: MetricCard
+// Rest of the components (MetricCard, QuickActions, etc.) remain the same
 function MetricCard({ icon: Icon, label, value, color, progress }) {
   const colors = {
     green: 'text-green-400 bg-green-500/20 border-green-500',
@@ -351,7 +347,6 @@ function MetricCard({ icon: Icon, label, value, color, progress }) {
   );
 }
 
-// Component: QuickActions
 function QuickActions({ onStreamToggle, isStreaming }) {
   return (
     <div className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10">
@@ -381,7 +376,6 @@ function QuickActions({ onStreamToggle, isStreaming }) {
   );
 }
 
-// Component: FeatureGrid
 function FeatureGrid() {
   const features = [
     { title: 'Real-Time AI Video', icon: Film, items: [
@@ -419,7 +413,6 @@ function FeatureGrid() {
   );
 }
 
-// Component: StreamControl
 function StreamControl({ onToggle, isStreaming, metrics }) {
   return (
     <div className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10">
@@ -482,13 +475,12 @@ function StreamControl({ onToggle, isStreaming, metrics }) {
   );
 }
 
-// Component: VideoTools
 function VideoTools() {
   const tools = [
-    { name: 'Real-Time Transform', desc: 'Decart.ai Mirage', icon: '✨' },
-    { name: 'AI Video Gen', desc: 'Sora 2 / Veo 3.1', icon: '🎬' },
-    { name: 'Character Consistency', desc: 'Midjourney Omni', icon: '👥' },
-    { name: 'AI Music', desc: 'Suno.ai Integration', icon: '🎵' }
+    { name: 'Real-Time Transform', desc: 'Decart.ai Mirage', icon: '✨', credits: 10 },
+    { name: 'AI Video Gen', desc: 'Sora 2 / Veo 3.1', icon: '🎬', credits: 10 },
+    { name: 'Character Consistency', desc: 'Midjourney Omni', icon: '👥', credits: 8 },
+    { name: 'AI Music', desc: 'Suno.ai Integration', icon: '🎵', credits: 5 }
   ];
 
   return (
@@ -500,15 +492,57 @@ function VideoTools() {
           <div key={i} className="bg-white/5 rounded-xl p-4 border border-purple-500/30 hover:bg-white/10 transition">
             <div className="text-4xl mb-2">{tool.icon}</div>
             <h3 className="font-bold mb-1">{tool.name}</h3>
-            <p className="text-sm text-gray-400 mb-4">{tool.desc}</p>
-            <button className="w-full bg-purple-500 px-4 py-2 rounded-lg hover:bg-purple-600 transition">
-              Launch Tool
-            </button>
+            <p className="text-sm text-gray-400 mb-2">{tool.desc}</p>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-yellow-400">{tool.credits} credits</span>
+              <button className="bg-purple-500 px-4 py-2 rounded-lg hover:bg-purple-600 transition text-sm">
+                Launch Tool
+              </button>
+            </div>
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+// Main App with Authentication Wrapper
+function App() {
+  const [showLogin, setShowLogin] = useState(true);
+
+  return (
+    <AuthProvider>
+      <AppWithAuth showLogin={showLogin} setShowLogin={setShowLogin} />
+    </AuthProvider>
+  );
+}
+
+function AppWithAuth({ showLogin, setShowLogin }) {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+        <div className="text-white text-2xl">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return showLogin ? (
+      <Login 
+        onSwitchToRegister={() => setShowLogin(false)}
+        onSuccess={() => {}}
+      />
+    ) : (
+      <Register 
+        onSwitchToLogin={() => setShowLogin(true)}
+        onSuccess={() => {}}
+      />
+    );
+  }
+
+  return <MainApp />;
 }
 
 export default App;
