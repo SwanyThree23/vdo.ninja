@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: swanybot-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: swanybot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend-node/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Node.js Backend
+  backend-node:
+    build:
+      context: ./backend-node
+      dockerfile: Dockerfile
+    container_name: swanybot-backend-node
+    environment:
+      - NODE_ENV=production
+      - PORT=8002
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=swanybot
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - JWT_SECRET=${JWT_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend-node:/app
+      - /app/node_modules
+    command: npm start
+
+  # FastAPI Backend (for compatibility)
+  backend-python:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: swanybot-backend-python
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=test_database
+      - CORS_ORIGINS=*
+      - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY}
+    ports:
+      - "8001:8001"
+    depends_on:
+      - mongodb
+
+  # MongoDB (for Python backend)
+  mongodb:
+    image: mongo:7-jammy
+    container_name: swanybot-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: swanybot-frontend
+    environment:
+      - REACT_APP_BACKEND_URL=http://localhost:8002
+      - REACT_APP_PYTHON_BACKEND_URL=http://localhost:8001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend-node
+      - backend-python
+    volumes:
+      - ./frontend/src:/app/src
+
+volumes:
+  postgres_data:
+  mongodb_data:
