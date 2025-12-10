@@ -22,7 +22,10 @@ function App() {
   const [processing, setProcessing] = useState(false);
   const [sessionId] = useState(() => `session-${Date.now()}`);
   const [credits] = useState(100); // Demo credits
+  const [showDeviceSelector, setShowDeviceSelector] = useState(false);
+  const [mediaStream, setMediaStream] = useState(null);
   const metricsIntervalRef = useRef(null);
+  const videoPreviewRef = useRef(null);
 
   // Skip login and enter demo mode
   const enterDemoMode = () => {
