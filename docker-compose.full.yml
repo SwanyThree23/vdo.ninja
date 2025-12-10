@@ -1,0 +1,150 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: swanybot-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: swanybot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend-node/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # MongoDB
+  mongodb:
+    image: mongo:7-jammy
+    container_name: swanybot-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: swanybot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  # Node.js Backend
+  backend-node:
+    build:
+      context: ./backend-node
+      dockerfile: Dockerfile
+    container_name: swanybot-backend-node
+    environment:
+      - NODE_ENV=production
+      - PORT=8002
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=swanybot
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./backend-node:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Python Backend
+  backend-python:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: swanybot-backend-python
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=test_database
+      - CORS_ORIGINS=*
+      - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY}
+    ports:
+      - "8001:8001"
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: swanybot-frontend
+    environment:
+      - REACT_APP_BACKEND_URL=http://localhost:8002
+      - REACT_APP_PYTHON_BACKEND_URL=http://localhost:8001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend-node
+      - backend-python
+    volumes:
+      - ./frontend/src:/app/src
+    restart: unless-stopped
+
+  # N8N Automation Platform
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: swanybot-n8n
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-admin123}
+      - WEBHOOK_URL=http://localhost:5678
+      - GENERIC_TIMEZONE=America/New_York
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - SWANYBOT_API=http://backend-node:8002
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows
+    depends_on:
+      - backend-node
+      - redis
+    restart: unless-stopped
+
+  # Ollama (Local AI)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: swanybot-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  redis_data:
+  n8n_data:
+  ollama_data:

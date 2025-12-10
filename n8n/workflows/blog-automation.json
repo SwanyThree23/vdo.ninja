@@ -1,0 +1,183 @@
+{
+  "name": "Blog Auto-Publishing",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */4 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every 4 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "schedule-trigger"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SWANYBOT_API}}/api/automation/content/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SWANYBOT_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "blog"
+            },
+            {
+              "name": "topic",
+              "value": "AI trends and technology"
+            },
+            {
+              "name": "length",
+              "value": 1500
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Generate Blog Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300],
+      "id": "generate-blog"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SWANYBOT_API}}/api/automation/content/video",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "script",
+              "value": "={{$json.content.substring(0, 500)}}"
+            },
+            {
+              "name": "title",
+              "value": "={{$json.title}}"
+            }
+          ]
+        }
+      },
+      "name": "Create Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 250],
+      "id": "create-video"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.WORDPRESS_URL}}/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "={{$node['Generate Blog Content'].json.title}}"
+            },
+            {
+              "name": "content",
+              "value": "={{$node['Generate Blog Content'].json.content}}"
+            },
+            {
+              "name": "status",
+              "value": "publish"
+            }
+          ]
+        }
+      },
+      "name": "Publish to WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 300],
+      "id": "publish-wordpress"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SWANYBOT_API}}/api/automation/social/publish",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "platforms",
+              "value": ["twitter", "linkedin"]
+            },
+            {
+              "name": "content",
+              "value": "={{$node['Generate Blog Content'].json.title}} - Read more: {{$node['Publish to WordPress'].json.link}}"
+            }
+          ]
+        }
+      },
+      "name": "Share on Social Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 300],
+      "id": "social-share"
+    }
+  ],
+  "connections": {
+    "Every 4 Hours": {
+      "main": [
+        [
+          {
+            "node": "Generate Blog Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Blog Content": {
+      "main": [
+        [
+          {
+            "node": "Create Video",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Publish to WordPress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish to WordPress": {
+      "main": [
+        [
+          {
+            "node": "Share on Social Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "id": "blog-automation",
+  "meta": {
+    "instanceId": "swanybot"
+  },
+  "tags": []
+}
