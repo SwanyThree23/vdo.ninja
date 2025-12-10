@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import './App.css';
 import { 
   Video, Users, TrendingUp, MessageSquare, Shield, 
-  Film, Sparkles, Globe, LogOut, User, Coins, X
+  Film, Sparkles, Globe, LogOut, User, Coins, X, Camera, Settings
 } from 'lucide-react';
+import MediaDeviceSelector from './components/MediaDeviceSelector';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 
