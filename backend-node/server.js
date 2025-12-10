@@ -28,6 +28,7 @@ const streamRoutes = require('./routes/streams');
 const paymentRoutes = require('./routes/payments');
 const userRoutes = require('./routes/users');
 const teamRoutes = require('./routes/teams');
+const automationRoutes = require('./routes/automation');
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -36,6 +37,7 @@ app.use('/api/streams', streamRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/teams', teamRoutes);
+app.use('/api/automation', automationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
