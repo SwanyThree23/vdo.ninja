@@ -1,0 +1,199 @@
+{
+  "name": "Video Content Repurposing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "video-upload",
+        "responseMode": "lastNode"
+      },
+      "name": "Webhook - Video Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "video-upload",
+      "id": "webhook-trigger"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SWANYBOT_API}}/api/automation/content/repurpose",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$json.apiKey}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "videoUrl",
+              "value": "={{$json.videoUrl}}"
+            },
+            {
+              "name": "outputFormats",
+              "value": ["blog", "shorts", "social"]
+            }
+          ]
+        }
+      },
+      "name": "Repurpose Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300],
+      "id": "repurpose-content"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "blog",
+              "name": "blogPost",
+              "value": "={{$json.results.blog}}",
+              "type": "object"
+            },
+            {
+              "id": "shorts",
+              "name": "shorts",
+              "value": "={{$json.results.shorts}}",
+              "type": "array"
+            },
+            {
+              "id": "social",
+              "name": "socialPosts",
+              "value": "={{$json.results.socialPosts}}",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "name": "Extract Results",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [650, 300],
+      "id": "extract-results"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SWANYBOT_API}}/api/automation/social/publish",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "platforms",
+              "value": ["twitter", "instagram", "tiktok"]
+            },
+            {
+              "name": "content",
+              "value": "={{$json.socialPosts[0].text}}"
+            }
+          ]
+        }
+      },
+      "name": "Publish to Social",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 200],
+      "id": "publish-social"
+    },
+    {
+      "parameters": {
+        "url": "={{$env.WORDPRESS_URL}}/wp-json/wp/v2/posts",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "={{$json.blogPost.title}}"
+            },
+            {
+              "name": "content",
+              "value": "={{$json.blogPost.content}}"
+            },
+            {
+              "name": "status",
+              "value": "publish"
+            }
+          ]
+        }
+      },
+      "name": "Publish Blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 300],
+      "id": "publish-blog"
+    },
+    {
+      "parameters": {
+        "to": "={{$node['Webhook - Video Upload'].json.email}}",
+        "subject": "Video Repurposing Complete",
+        "message": "Your video has been repurposed and published!\n\nBlog: {{$node['Publish Blog'].json.link}}\n\nSocial posts published on: Twitter, Instagram, TikTok"
+      },
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "id": "send-notification"
+    }
+  ],
+  "connections": {
+    "Webhook - Video Upload": {
+      "main": [
+        [
+          {
+            "node": "Repurpose Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repurpose Content": {
+      "main": [
+        [
+          {
+            "node": "Extract Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Results": {
+      "main": [
+        [
+          {
+            "node": "Publish to Social",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Publish Blog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Blog": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "id": "video-repurposing",
+  "tags": []
+}
